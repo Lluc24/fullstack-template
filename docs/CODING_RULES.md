@@ -1,71 +1,62 @@
 # Coding Rules
 
-These rules define one consistent way to write code in this repository. Follow them exactly. When they conflict with a habit, the rules win. When they conflict with the existing code around you, refactor toward the rules.
+Follow these exactly. When they conflict with a habit, the rules win; when they conflict with existing code, refactor the code.
 
-## 1. Code against guarantees, not possibilities
+## 1. Validate once at the boundary, then trust; fail loud
 
-At every point in the program, know what is true: which values exist, which invariants hold, what the caller has promised. Write code that relies on those guarantees. Never write code for states that cannot occur.
+- Validate where untrusted data enters: HTTP handlers, CLI args, file parsers, external APIs, database reads, environment variables. Reject bad input with a message naming what was expected and what was received.
+- Validation turns raw input into typed domain values. Past the boundary the data is valid **by construction**: no `if x is None`, no `hasattr`, no `isinstance` against your own types, no try/except around internal calls.
+- Never branch on a state that cannot occur. If you cannot tell whether a value can be absent, the contract is broken: fix the signature or the construction site, never the call site.
+- Let exceptions propagate to the layer that can act on them. Never catch to return `None` or a default, never swallow, never log-and-continue past a broken invariant.
+- `assert` is acceptable for invariants that must hold by construction.
 
-## 2. Validation happens once, at the boundary
+## 2. Make invalid states unrepresentable
 
-- Validate where untrusted data enters: HTTP handlers, CLI args, file parsers, external APIs, database reads, environment variables.
-- Validation converts raw input into typed, trustworthy domain values. After the boundary, the data is valid **by construction**.
-- Inside the system, do not re-validate. No `if x is None`, no `hasattr`, no `isinstance` checks against your own code, no try/except around internal calls unless the callee's contract explicitly allows that failure.
+- Types over checks. Parse strings into domain types at the boundary. Dataclasses, TypedDict, and enums instead of loose dicts.
+- Narrow `Optional` away early. A field always present after validation is not `Optional`.
+- One canonical representation per concept. Raw JSON and dicts do not travel past the boundary.
 
-## 3. No dead checks
+## 3. Layers point inward
 
-- Never write `if x is None: return` (or `continue`, `raise`, a default value) where `x` is already guaranteed non-None by a type, a constructor, or a check above.
-- Never branch on impossible states. A branch for a case that cannot happen hides design errors and doubles the reader's work.
-- If you cannot tell whether a value can be absent, the contract is broken. Fix the contract (signature, type, construction site) - do not patch the call site with a check.
+- `domain` holds types and business rules and knows nothing about `db`, `api`, adapters, or frameworks: no imports from them, and no table names, column names, status codes, or ORM models in its vocabulary.
+- `application` orchestrates use cases and imports `domain`. No business rules, no SQL.
+- `db`, `api`, and external-service adapters import `domain` and `application`. Only the composition root imports them.
+- The database layer is thin: it maps rows to domain types and back. No decisions in SQL, ORM hooks, or triggers. Triggers only for bookkeeping (`updated_at`, cascading deletes), readable in one glance.
+- A script that fits in one file is its own boundary; do not scaffold layers for it.
 
-## 4. Make invalid states unrepresentable
+## 4. Pure by default
 
-- Prefer types over checks. Parse strings into domain types at the boundary. Use dataclasses / TypedDict / enums instead of loose dicts.
-- Narrow `Optional` away as early as possible. A field that is always present after validation is not `Optional`.
-- One canonical representation per concept. Raw JSON/dicts do not travel past the boundary layer.
+- Prefer functions over state. A function that takes data and returns data beats a class that mutates itself through methods. A class earns its place only when it protects an invariant or a framework requires it.
+- A function computes from its arguments: no hidden state, no mutation of arguments, no I/O.
+- Data is immutable: `frozen=True` dataclasses, tuples over lists when the value will not change.
+- Side effects (database, network, clock, randomness) live in adapters and are passed in. A function that needs the time takes `now` as an argument.
 
-## 5. Failure policy: loud at the boundary, silent nowhere
+## 5. One source of truth
 
-- At the boundary, reject bad input with a clear error message naming what was expected and what was received.
-- In the interior, let exceptions propagate to the layer that can act on them. Never catch an exception to return `None` or a default; never swallow; never log-and-continue past a broken invariant.
-- `assert` is acceptable for internal invariants that must hold by construction.
+- A business rule, calculation, or mapping lives in exactly one function. Call it; never re-implement it.
+- Duplication is cheaper than a wrong abstraction. Three similar lines are fine; the same decision in two places is not.
 
-## 6. Functions
+## 6. No escape hatches
 
-- One function, one job. If it fits on one screen and needs no sections, it is the right size.
-- The name states what it does; the body does exactly that.
-- When types do not say it all, document the contract in the docstring:
-  - **Pre:** what the caller must guarantee (non-empty list, sorted input, open connection).
-  - **Post:** what the function guarantees (returns the matching row or raises `NotFoundError`).
-- A function body trusts its Pre completely. A caller establishes the Pre before calling.
+- No `# type: ignore`, `cast()`, `Any`, or `# noqa` outside adapters. Each hides a broken contract. Fix the type or the code. Inside an adapter, name the library and reason on the same line.
+- A badly typed third-party library gets one typed wrapper at the boundary, not an ignore at every call site.
 
-## 7. Naming
+## 7. Functions and names
 
-- Names say what the thing is, long enough to be unambiguous: `retry_delay_seconds`, not `rd`.
-- Booleans read as predicates: `is_ready`, `has_items`, `can_retry`. Never negated (`no_items`, `is_not_valid`).
-- No abbreviations except universal ones (`id`, `url`, `db`). Include units and qualifiers in the name instead of in a comment.
+- One function, one job. The name states what it does; the body does exactly that.
+- When types do not say it all, the docstring states **Pre** (what the caller guarantees) and **Post** (what the function guarantees). The body trusts its Pre completely.
+- Names are unambiguous: `retry_delay_seconds`, not `rd`. Units and qualifiers go in the name. No abbreviations except universal ones (`id`, `url`, `db`).
+- Booleans read as predicates (`is_ready`, `has_items`), never negated.
 
 ## 8. Comments
 
-Code must explain itself. The default number of comments is **zero**; each comment must earn its place.
+Default count is **zero**. Allowed only for what code cannot carry: a non-obvious **why**, a Pre/Post **contract**, or a **reference** to a spec or issue. Forbidden: narrating what the code does, restating a signature, excusing weak code, commented-out code, changelog comments. A comment that justifies a workaround is a bug report: refactor.
 
-Allowed, when they add information the code cannot carry:
-- **Why**: a non-obvious reason, constraint, or decision (`# OrderedDict: iteration order is part of the wire format`).
-- **Contracts**: Pre/Post on functions whose types don't say enough.
-- **References**: spec section, issue link, or standard that justifies a non-obvious implementation.
+## 9. Leave it better than you found it
 
-Forbidden:
-- Narrating *what* the code does (`# increment counter`, `# loop over users`). If the what needs explaining, rename or extract a function instead.
-- Restating the signature or the type annotation.
-- Self-justifying comments that excuse weak code (`# this is a bit hacky but...`, `# not ideal but works for now`). Fix the code, or document the real constraint that forces the shape.
-- Commented-out code and changelog comments. Version control owns history.
-
-A comment that justifies a workaround is a bug report, not documentation. Treat it as a prompt to refactor.
-
-## 9. Consistency
-
-- One way to do each thing in this codebase. Match the surrounding patterns; if the pattern violates these rules, refactor it.
-- Let the formatter and linter own layout. Do not hand-format.
+- Dead code, stale comments, unused imports, or wrong logic in a file you already edit: fix it in the same change.
+- Problems in files you are not touching: report them in the PR description.
+- One way to do each thing. Match surrounding patterns; if a pattern violates these rules, refactor it. The formatter and linter own layout.
 
 ## Example
 
@@ -75,8 +66,6 @@ def get_discount(user):
     if user is None:
         return 0
     if not hasattr(user, "plan"):   # TODO: shouldn't happen but just in case
-        return 0
-    if user.plan is None:
         return 0
     plan = PLANS.get(user.plan)
     if plan is None:
@@ -89,5 +78,3 @@ def get_discount(user: User) -> float:
     Post: returns the plan's discount rate."""
     return PLANS[user.plan].discount
 ```
-
-The good version is shorter **and** safer: the guarantee lives in one place (the boundary), and every reader can see it.
