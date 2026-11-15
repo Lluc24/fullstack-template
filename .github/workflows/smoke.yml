@@ -1,0 +1,21 @@
+name: Smoke
+
+on:
+  # Vercel sends this once the production domain points at a new deployment.
+  repository_dispatch:
+    types: [vercel.deployment.promoted]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    env:
+      SITE_URL: ${{ vars.SITE_URL }}
+    steps:
+      - name: The page and the API answer 200
+        run: |
+          for path in / /v1/health; do
+            curl --fail-with-body --silent --show-error --output /dev/null --retry 3 --retry-delay 10 --max-time 30 "$SITE_URL$path"
+          done

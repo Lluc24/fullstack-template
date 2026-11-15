@@ -1,0 +1,26 @@
+name: Preview
+
+on: deployment_status
+
+permissions: {}
+
+jobs:
+  preview:
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment.environment == 'Preview'
+    runs-on: ubuntu-latest
+    env:
+      PREVIEW_URL: ${{ github.event.deployment_status.environment_url }}
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+    steps:
+      # Exactly 200: without a valid bypass secret Vercel answers 302 or 401 with its login page.
+      - name: The page and the API answer 200
+        run: |
+          for path in / /v1/health; do
+            status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              --retry 3 --retry-delay 10 --max-time 120 \
+              --header "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" "$PREVIEW_URL$path")
+            echo "$status $path"
+            [ "$status" = 200 ]
+          done
